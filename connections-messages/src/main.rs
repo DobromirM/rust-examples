@@ -12,6 +12,7 @@ use futures::future::FutureExt;
 use std::fmt;
 use std::collections::HashMap;
 
+struct ConnectionPoolHandler {}
 
 struct ConnectionPool {
     connections: HashMap<String, ConnectionHandler>,
@@ -22,15 +23,15 @@ impl ConnectionPool {
         return ConnectionPool { connections: HashMap::new() };
     }
 
-    fn get_connection(&mut self, client: &Client, host: &str) -> &ConnectionHandler {
+    fn get_connection(&mut self, client: &Client, host: &str) -> Result<&ConnectionHandler, ConnectionError> {
         if !self.connections.contains_key(host) {
             // TODO The connection buffer is hardcoded
-            let (connection, connection_handler) = Connection::new(host, 5).unwrap();
+            let (connection, connection_handler) = Connection::new(host, 5)?;
             client.schedule_task(connection.open());
 
             self.connections.insert(host.to_string(), connection_handler);
         }
-        return self.connections.get(host).unwrap();
+        return Ok(self.connections.get(host).ok_or(ConnectionError::ConnectError)?);
     }
 }
 
@@ -80,12 +81,16 @@ impl Connection {
 }
 
 #[derive(Debug, Clone)]
-pub enum ConnectionError
-{
+pub enum ConnectionError {
     ParseError,
     ConnectError,
     SendMessageError,
 
+}
+
+#[derive(Debug, Clone)]
+pub enum ClientError {
+    RuntimeError,
 }
 
 impl Error for ConnectionError {}
@@ -124,6 +129,11 @@ impl From<tokio::sync::mpsc::error::SendError<Message>, > for ConnectionError {
     }
 }
 
+impl From<std::io::Error> for ClientError {
+    fn from(_: std::io::Error) -> Self {
+        ClientError::RuntimeError
+    }
+}
 
 struct Client {
     rt: tokio::runtime::Runtime,
@@ -131,9 +141,9 @@ struct Client {
 
 
 impl Client {
-    fn new() -> Client {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        return Client { rt };
+    fn new() -> Result<Client, ClientError> {
+        let rt = tokio::runtime::Runtime::new()?;
+        return Ok(Client { rt });
     }
 
     fn schedule_task<F>(&self, task: impl Future<Output=Result<F, ConnectionError>> + Send + 'static)
@@ -149,9 +159,9 @@ impl Client {
 
 
 fn main() {
-    let client = Client::new();
+    let client = Client::new().unwrap();
     let mut connection_pool = ConnectionPool::new();
-    let handler = connection_pool.get_connection(&client, "ws://127.0.0.1:9001");
+    let handler = connection_pool.get_connection(&client, "ws://127.0.0.1:9001").unwrap();
 
     let handler_clone = handler.tx.clone();
     client.schedule_task(Connection::send_message(handler_clone, String::from(r#"@sync(node:"/unit/foo",lane:info)"#)));
