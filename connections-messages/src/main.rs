@@ -10,6 +10,34 @@ use url;
 use std::future::Future;
 use futures::future::FutureExt;
 use std::fmt;
+use std::collections::HashMap;
+
+
+struct ConnectionPool {
+    connections: HashMap<String, ConnectionHandler>,
+}
+
+impl ConnectionPool {
+    fn new() -> ConnectionPool {
+        return ConnectionPool { connections: HashMap::new() };
+    }
+
+    fn get_connection(&mut self, client: &Client, host: &str) -> &ConnectionHandler {
+        if !self.connections.contains_key(host) {
+            // TODO The connection buffer is hardcoded
+            let (connection, connection_handler) = Connection::new(host, 5).unwrap();
+            client.schedule_task(connection.open());
+
+            self.connections.insert(host.to_string(), connection_handler);
+        }
+        return self.connections.get(host).unwrap();
+    }
+}
+
+struct ConnectionHandler {
+    tx: mpsc::Sender<Message>,
+}
+
 
 struct Connection {
     url: url::Url,
@@ -17,11 +45,11 @@ struct Connection {
 }
 
 impl Connection {
-    fn new(host: &str) -> Result<(Connection, mpsc::Sender<Message>), ConnectionError> {
+    fn new(host: &str, buffer_size: usize) -> Result<(Connection, ConnectionHandler), ConnectionError> {
         let url = url::Url::parse(&host)?;
-        let (tx, rx) = mpsc::channel(5);
+        let (tx, rx) = mpsc::channel(buffer_size);
 
-        return Ok((Connection { url, rx }, tx));
+        return Ok((Connection { url, rx }, ConnectionHandler { tx }));
     }
 
     async fn open(self) -> Result<(), ConnectionError> {
@@ -36,12 +64,13 @@ impl Connection {
         return Ok(());
     }
 
-    async fn receive_messages(mut read_stream: SplitStream<WebSocketStream<TcpStream>>) {
-        while let Some(message) = read_stream.next().await {
+    async fn receive_messages(read_stream: SplitStream<WebSocketStream<TcpStream>>) {
+        read_stream.for_each_concurrent(10, |message| async {
             if let Ok(m) = message {
+                // TODO Add a real callback
                 println!("{}", m);
             }
-        }
+        }).await;
     }
 
     async fn send_message(mut tx: mpsc::Sender<Message>, message: String) -> Result<(), ConnectionError> {
@@ -121,14 +150,14 @@ impl Client {
 
 fn main() {
     let client = Client::new();
-    let (connection, tx) = Connection::new("ws://127.0.0.1:9001").unwrap();
+    let mut connection_pool = ConnectionPool::new();
+    let handler = connection_pool.get_connection(&client, "ws://127.0.0.1:9001");
 
-    client.schedule_task(connection.open());
-    let tx_clone = mpsc::Sender::clone(&tx);
-    client.schedule_task(Connection::send_message(tx_clone, String::from(r#"@sync(node:"/unit/foo",lane:info)"#)));
+    let handler_clone = handler.tx.clone();
+    client.schedule_task(Connection::send_message(handler_clone, String::from(r#"@sync(node:"/unit/foo",lane:info)"#)));
     thread::sleep(time::Duration::from_secs(2));
 
-    let tx_clone = mpsc::Sender::clone(&tx);
-    client.schedule_task(Connection::send_message(tx_clone, String::from(r#"@sync(node:"/unit/foo",lane:info)"#)));
+    let handler_clone = handler.tx.clone();
+    client.schedule_task(Connection::send_message(handler_clone, String::from(r#"@sync(node:"/unit/foo",lane:info)"#)));
     thread::sleep(time::Duration::from_secs(1))
 }
