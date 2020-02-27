@@ -5,14 +5,10 @@ use tokio_tungstenite::tungstenite::protocol::Message;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use std::{thread, time};
-use std::error::Error;
 use url;
 use std::future::Future;
 use futures::future::FutureExt;
-use std::fmt;
 use std::collections::HashMap;
-
-struct ConnectionPoolHandler {}
 
 struct ConnectionPool {
     connections: HashMap<String, ConnectionHandler>,
@@ -23,7 +19,7 @@ impl ConnectionPool {
         return ConnectionPool { connections: HashMap::new() };
     }
 
-    fn get_connection(&mut self, client: &Client, host: &str) -> Result<&ConnectionHandler, ConnectionError> {
+    fn get_connection(&mut self, client: &Client, host: &str) -> Result<ConnectionHandler, ConnectionError> {
         if !self.connections.contains_key(host) {
             // TODO The connection buffer is hardcoded
             let (connection, connection_handler) = Connection::new(host, 5)?;
@@ -31,14 +27,14 @@ impl ConnectionPool {
 
             self.connections.insert(host.to_string(), connection_handler);
         }
-        return Ok(self.connections.get(host).ok_or(ConnectionError::ConnectError)?);
+        return Ok(self.connections.get(host).ok_or(ConnectionError::ConnectError)?.clone());
     }
 }
 
+#[derive(Debug, Clone)]
 struct ConnectionHandler {
     tx: mpsc::Sender<Message>,
 }
-
 
 struct Connection {
     url: url::Url,
@@ -66,7 +62,7 @@ impl Connection {
     }
 
     async fn receive_messages(read_stream: SplitStream<WebSocketStream<TcpStream>>) {
-        read_stream.for_each_concurrent(10, |message| async {
+        read_stream.for_each(|message| async {
             if let Ok(m) = message {
                 // TODO Add a real callback
                 println!("{}", m);
@@ -91,18 +87,6 @@ pub enum ConnectionError {
 #[derive(Debug, Clone)]
 pub enum ClientError {
     RuntimeError,
-}
-
-impl Error for ConnectionError {}
-
-impl fmt::Display for ConnectionError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            ConnectionError::ParseError => write!(f, "Parse error!"),
-            ConnectionError::ConnectError => write!(f, "Connect error!"),
-            ConnectionError::SendMessageError => write!(f, "Send message error!")
-        }
-    }
 }
 
 impl From<url::ParseError, > for ConnectionError {
@@ -150,7 +134,7 @@ impl Client {
         where F: Send + 'static {
         &self.rt.spawn(async move { task.await }.inspect(|response| {
             match response {
-                Err(e) => println!("{}", e),
+                Err(e) => println!("{:?}", e),
                 Ok(_) => ()
             }
         }));
