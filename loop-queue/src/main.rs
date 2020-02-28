@@ -24,23 +24,25 @@ impl ConnectionPool {
         return (ConnectionPool { connections: HashMap::new(), rx }, ConnectionPoolHandler { tx });
     }
 
-    fn open(mut self) -> Result<(), ConnectionError> {
-        let handle_messages = async move {
-            loop {
-                let response = self.rx.recv().await;
+    fn open(self, client: &Client) -> Result<(), ConnectionError> {
+        let handle_messages = self.handle_messages();
 
-                match response {
-                    Some((host, message)) => {
-                        let handler = self.get_connection(&host).await.unwrap();
-                        handler.send_message(&message).await;
-                    }
-                    None => ()
-                }
-            }
-        };
-
-        tokio::spawn(handle_messages);
+        client.schedule_task(handle_messages);
         return Ok(());
+    }
+
+    async fn handle_messages(mut self) -> Result<(), ConnectionError> {
+        loop {
+
+            let response = self.rx.recv().await;
+            match response {
+                Some((host, message)) => {
+                    let handler = self.get_connection(&host).await?;
+                    handler.send_message(&message).await?;
+                }
+                None => ()
+            }
+        }
     }
 
     async fn get_connection(&mut self, host: &str) -> Result<&mut ConnectionHandler, ConnectionError> {
@@ -187,12 +189,13 @@ impl Client {
     }
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
+    let client = Client::new().unwrap();
     let (connection_pool, mut handler) = ConnectionPool::new(5);
-    connection_pool.open().unwrap();
+    connection_pool.open(&client).unwrap();
 
     handler.send_message("ws://127.0.0.1:9001", "@sync(node:\"/unit/foo\", lane:\"info\")").unwrap();
     handler.send_message("ws://127.0.0.1:9001", "@sync(node:\"/unit/foo\", lane:\"info\")").unwrap();
+
     thread::sleep(time::Duration::from_secs(10));
 }
