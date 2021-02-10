@@ -1,15 +1,9 @@
 [package]
-name = "websockets"
+name = "unsafe-test"
 version = "0.1.0"
 authors = ["DobromirM <mr.d.marinov@gmail.com>"]
 edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
 [dependencies]
-url = "2.1.1"
-futures = "0.3.1"
-tokio = { version = "0.2", features = ["full"] }
-tokio-tungstenite = "0.10"
-futures-util = "0.3.4"
-async-std = "1.5.0"
-tungstenite = "0.10.1"
